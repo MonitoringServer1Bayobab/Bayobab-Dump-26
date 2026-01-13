@@ -195,6 +195,16 @@ def extract_email(address):
     # If parsing fails, return the original address
     return address
 
+def add_three_hours_to_datetime(date_str):
+    # Convert string to datetime object
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    
+    # Add 3 hours
+    new_date_obj = date_obj - timedelta(hours=4)
+    
+    # Convert back to string
+    return new_date_obj.strftime("%Y-%m-%d %H:%M:%S")
+
 def updateInboxMails(InboxItems):
 
     print(" ")
@@ -208,8 +218,11 @@ def updateInboxMails(InboxItems):
 
     latestEmail = str(str(getLastRecordDate("Inbox")))
     latestEmail = add_second_to_timestamp(latestEmail)
-    
-    #restriction = f"@SQL=urn:schemas:httpmail:datereceived > '{latestEmail}'"  
+
+    # start_date = '2025-09-02 05:00:00'
+    start_date = '2026-01-08 05:00:00'
+    end_date = '2026-01-08 11:00:00'
+
     subject_condition = " AND NOT ("
     for subject_filter in subject_filters:
         subject_condition += f"\"urn:schemas:httpmail:subject\" LIKE '%{subject_filter}%' OR "
@@ -217,124 +230,241 @@ def updateInboxMails(InboxItems):
     subject_condition += ")"
     
 
-    restriction = f"@SQL=urn:schemas:httpmail:datereceived > '{latestEmail}' AND NOT (\"urn:schemas:httpmail:fromname\" LIKE '%{sender_filters[0]}%' OR \"urn:schemas:httpmail:fromname\" LIKE '{sender_filters[1]}')" + subject_condition
+    # restriction = f"@SQL=urn:schemas:httpmail:datereceived > '{latestEmail}' AND NOT (\"urn:schemas:httpmail:fromname\" LIKE '%{sender_filters[0]}%' OR \"urn:schemas:httpmail:fromname\" LIKE '{sender_filters[1]}')" + subject_condition
+    # restriction = f"@SQL=urn:schemas:httpmail:datereceived > '{latestEmail}'  AND NOT (\"urn:schemas:httpmail:fromname\" LIKE '%{sender_filters[0]}%' OR \"urn:schemas:httpmail:fromname\" LIKE '{sender_filters[1]}')" + subject_condition
+    restriction = f"@SQL=urn:schemas:httpmail:datereceived > '{start_date}' AND urn:schemas:httpmail:datereceived < '{end_date}' AND NOT (\"urn:schemas:httpmail:fromname\" LIKE '%{sender_filters[0]}%' OR \"urn:schemas:httpmail:fromname\" LIKE '{sender_filters[1]}')" + subject_condition
     print(restriction)
-    InboxItems = Inbox.Items.Restrict(restriction)
+    # InboxItems = Inbox.Items.Restrict(restriction)
+    InboxItems = list(Inbox.Items.Restrict(restriction))  
     print("Filtered Items in Inbox: " , len(InboxItems))
 
-    print(latestEmail)
+    top_5_items = list(InboxItems) # Convert to list and slice first 5 items
+    # print("Top 5 items: " , top_5_items)
+
+    print("latestEmail in database", latestEmail)
+
+    for i, email in enumerate(top_5_items, 1):
+        try:
+            print(f"\nEmail {i}:")
+
+            
+            try:
+                ReceivedTime = email.ReceivedTime
+            except AttributeError:
+                ReceivedTime = None
+
+
+            # ReceivedTime = email.ReceivedTime
+            ReceivedTime = str(email.ReceivedTime)
+            ReceivedTime = ReceivedTime[0:19]                 
+            ReceivedTime = convert_To_GMT(ReceivedTime)
+            print(f"Received: {ReceivedTime if ReceivedTime else 'Not Available'}")
+           
+            Mailsubject = str(email.Subject)
+            print("Mailsubject:", Mailsubject)
+
+            to_emails = []
+
+            try:
+                sender_email = None
+                sender_name = None
+                to_emails = []
+                to_names = []
+                cc_emails = []
+                cc_names = []
+
+                for recipient in email.Recipients:
+                    if recipient.Type == 1:  # Type 1 represents "To" recipients
+                        to_email = None
+                        to_name = None
+                        if recipient.AddressEntry:
+                            try:
+                                if recipient.AddressEntry.Type == "EX":
+                                    to_email = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
+                                elif recipient.AddressEntry.Type == "SMTP":
+                                    to_email = recipient.AddressEntry.Address
+                                to_name = recipient.Name
+                            except AttributeError:
+                                to_email = None  # or assign a default value
+                        to_emails.append(to_email)
+                        to_names.append(to_name)
+                    elif recipient.Type == 2:  # Type 2 represents "CC" recipients
+                        cc_email = None
+                        cc_name = None
+                        if recipient.AddressEntry:
+                            try:
+                                if recipient.AddressEntry.Type == "EX":
+                                    cc_email = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
+                                elif recipient.AddressEntry.Type == "SMTP":
+                                    cc_email = recipient.AddressEntry.Address
+                                cc_name = recipient.Name
+                            except AttributeError:
+                                cc_email = None  # or assign a default value
+                        cc_emails.append(cc_email)
+                        cc_names.append(cc_name)
+
+                # Retrieve sender's email address and name
+                if email.SenderEmailType == "SMTP":
+                    sender_email = email.SenderEmailAddress
+                else:
+                    try:
+                        sender_email = email.Sender.GetExchangeUser().PrimarySmtpAddress
+                    except AttributeError:
+                        sender_email = None  # or assign a default value
+                sender_name = email.SenderName
+
+            except pywintypes.com_error as e:
+                print(f"Error occurred while accessing recipients property: {e}")
+
+            to_emails_str = ';'.join(filter(None, to_emails))
+            to_names_str = ';'.join(filter(None, to_names))
+            cc_emails_str = ';'.join(filter(None, cc_emails))
+            cc_names_str = ';'.join(filter(None, cc_names))
+            
+
+            
+            senderName = str(email.SenderName)
+            ticketNo = getTicketNo(Mailsubject)
+            mailType = getMailType(Mailsubject)
+            Engineer = ""
+
+            currentRecordDateString = ReceivedTime
+            format_string = "%Y-%m-%d %H:%M:%S"
+            currentRecordDateString = datetime.strptime(currentRecordDateString , format_string)
+
+            queryStatus = insertDB(Mailsubject , ReceivedTime , ticketNo , Engineer , sender_email , sender_name , mailType , category , to_emails_str , to_names_str , cc_emails_str , cc_names_str)  
+            queryStatus = "Ok"
+            # print("remainingItems"  , "--> " ,  ReceivedTime ," : ", queryStatus , "Rem : " , index , "-->", ticketNo , "-->", Mailsubject)
+
+            
+
+        except Exception as e:
+            print(f"  Error reading email {i}: {e}")
+
+    print("latestEmail in database", latestEmail)
     index = len(InboxItems) - 1
 
-    for i in range(0 , len(InboxItems)):    
-                        
-        remainingItems = len(InboxItems) - index
-        email = InboxItems[index]
+    # sys.exit(1)
 
-        try:
+    # for i, email in enumerate(InboxItems, 1):  
+    # # for i in range(0 , len(InboxItems)):  
+    # # for i in range(len(InboxItems) - 1, -1, -1):
+    #     # email = InboxItems[index]
+    #     # remaining_items = (len(InboxItems)-1)-i
+    #     # print("remaining_items", remaining_items)
+    #     email = InboxItems[i]
 
-            Mailsubject = str(email.Subject)
+    #     try:
 
-            if Mailsubject.find(undelivered) == -1 or Mailsubject.find(reply) == -1:
-                Mailsubject = str(email.Subject)                
+    #         Mailsubject = str(email.Subject)
+
+    #         if Mailsubject.find(undelivered) == -1 or Mailsubject.find(reply) == -1:
+    #             Mailsubject = str(email.Subject)    
+
+    #             print("Lyn =========> email", email)            
                 
-                # Access the SentOn property
-                ReceivedTime = email.ReceivedTime
-                ReceivedTime = str(email.ReceivedTime)
-                ReceivedTime = ReceivedTime[0:19]                 
-                ReceivedTime = convert_To_GMT(ReceivedTime)
-           
-                #print()
-                #print(index , "Received On : " , ReceivedTime  , "Subject : " ,Mailsubject)
-                to_emails = []
+    #             # Access the SentOn property
+    #             ReceivedTime = email.ReceivedTime
+    #             ReceivedTime = str(email.ReceivedTime)
+    #             ReceivedTime = ReceivedTime[0:19]                 
+    #             ReceivedTime = convert_To_GMT(ReceivedTime)
+        
+    #             #print()
+    #             #print(index , "Received On : " , ReceivedTime  , "Subject : " ,Mailsubject)
+    #             to_emails = []
 
-                try:
-                    sender_email = None
-                    sender_name = None
-                    to_emails = []
-                    to_names = []
-                    cc_emails = []
-                    cc_names = []
+    #             try:
+    #                 sender_email = None
+    #                 sender_name = None
+    #                 to_emails = []
+    #                 to_names = []
+    #                 cc_emails = []
+    #                 cc_names = []
 
-                    for recipient in email.Recipients:
-                        if recipient.Type == 1:  # Type 1 represents "To" recipients
-                            to_email = None
-                            to_name = None
-                            if recipient.AddressEntry:
-                                try:
-                                    if recipient.AddressEntry.Type == "EX":
-                                        to_email = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
-                                    elif recipient.AddressEntry.Type == "SMTP":
-                                        to_email = recipient.AddressEntry.Address
-                                    to_name = recipient.Name
-                                except AttributeError:
-                                    to_email = None  # or assign a default value
-                            to_emails.append(to_email)
-                            to_names.append(to_name)
-                        elif recipient.Type == 2:  # Type 2 represents "CC" recipients
-                            cc_email = None
-                            cc_name = None
-                            if recipient.AddressEntry:
-                                try:
-                                    if recipient.AddressEntry.Type == "EX":
-                                        cc_email = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
-                                    elif recipient.AddressEntry.Type == "SMTP":
-                                        cc_email = recipient.AddressEntry.Address
-                                    cc_name = recipient.Name
-                                except AttributeError:
-                                    cc_email = None  # or assign a default value
-                            cc_emails.append(cc_email)
-                            cc_names.append(cc_name)
+    #                 for recipient in email.Recipients:
+    #                     if recipient.Type == 1:  # Type 1 represents "To" recipients
+    #                         to_email = None
+    #                         to_name = None
+    #                         if recipient.AddressEntry:
+    #                             try:
+    #                                 if recipient.AddressEntry.Type == "EX":
+    #                                     to_email = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
+    #                                 elif recipient.AddressEntry.Type == "SMTP":
+    #                                     to_email = recipient.AddressEntry.Address
+    #                                 to_name = recipient.Name
+    #                             except AttributeError:
+    #                                 to_email = None  # or assign a default value
+    #                         to_emails.append(to_email)
+    #                         to_names.append(to_name)
+    #                     elif recipient.Type == 2:  # Type 2 represents "CC" recipients
+    #                         cc_email = None
+    #                         cc_name = None
+    #                         if recipient.AddressEntry:
+    #                             try:
+    #                                 if recipient.AddressEntry.Type == "EX":
+    #                                     cc_email = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
+    #                                 elif recipient.AddressEntry.Type == "SMTP":
+    #                                     cc_email = recipient.AddressEntry.Address
+    #                                 cc_name = recipient.Name
+    #                             except AttributeError:
+    #                                 cc_email = None  # or assign a default value
+    #                         cc_emails.append(cc_email)
+    #                         cc_names.append(cc_name)
 
-                    # Retrieve sender's email address and name
-                    if email.SenderEmailType == "SMTP":
-                        sender_email = email.SenderEmailAddress
-                    else:
-                        try:
-                            sender_email = email.Sender.GetExchangeUser().PrimarySmtpAddress
-                        except AttributeError:
-                            sender_email = None  # or assign a default value
-                    sender_name = email.SenderName
+    #                 # Retrieve sender's email address and name
+    #                 if email.SenderEmailType == "SMTP":
+    #                     sender_email = email.SenderEmailAddress
+    #                 else:
+    #                     try:
+    #                         sender_email = email.Sender.GetExchangeUser().PrimarySmtpAddress
+    #                     except AttributeError:
+    #                         sender_email = None  # or assign a default value
+    #                 sender_name = email.SenderName
 
-                except pywintypes.com_error as e:
-                    print(f"Error occurred while accessing recipients property: {e}")
+    #             except pywintypes.com_error as e:
+    #                 print(f"Error occurred while accessing recipients property: {e}")
 
-                to_emails_str = ';'.join(filter(None, to_emails))
-                to_names_str = ';'.join(filter(None, to_names))
-                cc_emails_str = ';'.join(filter(None, cc_emails))
-                cc_names_str = ';'.join(filter(None, cc_names))
+    #             to_emails_str = ';'.join(filter(None, to_emails))
+    #             to_names_str = ';'.join(filter(None, to_names))
+    #             cc_emails_str = ';'.join(filter(None, cc_emails))
+    #             cc_names_str = ';'.join(filter(None, cc_names))
                 
 
              
-                senderName = str(email.SenderName)
-                ticketNo = getTicketNo(Mailsubject)
-                mailType = getMailType(Mailsubject)
-                Engineer = ""
+    #             senderName = str(email.SenderName)
+    #             ticketNo = getTicketNo(Mailsubject)
+    #             mailType = getMailType(Mailsubject)
+    #             Engineer = ""
 
-                currentRecordDateString = ReceivedTime
-                format_string = "%Y-%m-%d %H:%M:%S"
-                currentRecordDateString = datetime.strptime(currentRecordDateString , format_string)
+    #             currentRecordDateString = ReceivedTime
+    #             format_string = "%Y-%m-%d %H:%M:%S"
+    #             currentRecordDateString = datetime.strptime(currentRecordDateString , format_string)
 
-                queryStatus = insertDB(Mailsubject , ReceivedTime , ticketNo , Engineer , sender_email , sender_name , mailType , category , to_emails_str , to_names_str , cc_emails_str , cc_names_str)  
-                queryStatus = "Ok"
-                print(remainingItems  , "--> " ,  ReceivedTime ," : ", queryStatus , "Rem : " , index , "-->", ticketNo , "-->", Mailsubject)
+    #             queryStatus = insertDB(Mailsubject , ReceivedTime , ticketNo , Engineer , sender_email , sender_name , mailType , category , to_emails_str , to_names_str , cc_emails_str , cc_names_str)  
+    #             queryStatus = "Ok"
+    #             # print(remainingItems  , "--> " ,  ReceivedTime ," : ", queryStatus , "Rem : " , index , "-->", ticketNo , "-->", Mailsubject)
 
 
-                #print("CC Emails" , to_emails_str)
-                #print("CC Names" , cc_names , "\n")
+    #             #print("CC Emails" , to_emails_str)
+    #             #print("CC Names" , cc_names , "\n")
 
-                #print("To Emails" , to_emails) 
-                #print("To Names" , to_names , "\n") 
+    #             #print("To Emails" , to_emails) 
+    #             #print("To Names" , to_names , "\n") 
 
-                #print("Sender" , sender_email)
+    #             #print("Sender" , sender_email)
              
 
-        except pywintypes.com_error as e:
-                        print(f"Error occurred while accessing recepients property: {e}")
-        index =index - 1
+    #     except pywintypes.com_error as e:
+    #         print(f"Error occurred while accessing recepients property: {e}")
+    #     # except Exception as e:
+    #     #     print(f"An unexpected error occurred: {e}")
+    #     #     sys.exit(1)  # Terminate execution immediately
+    #     # index =index - 1
         
 def updateSentMails(SentItems):
 
     print(" ")
+    # sys.exit(1)
     print("Total Emails in SentBox: " , len(SentItems))
     category = "Sent"
 
@@ -426,49 +556,6 @@ def run_command(command, check=True):
         subprocess.run(command, shell=True, check=check)
     except subprocess.CalledProcessError as e:
         print(f"Error running command: {e}")
-
-    #     """ Helper function to run shell commands """
-    # result = subprocess.run(command, shell=True, capture_output=True, text=True)
-    # if result.returncode != 0:
-    #     print(f"Command failed with error: {result.stderr}")
-    #     raise subprocess.CalledProcessError(result.returncode, command)
-    # return result.stdout
-
-# def automate_rebase(repo_dir, file_name='dump.sql.gz', keep_commits_count=20):
-#     """Keep only the latest 20 commits that affect the specified file."""
-#     os.chdir(repo_dir)
-    
-#     # Find commits related to the file
-#     commits = run_command(f"git log --pretty=format:'%H' -- {file_name}").split('\n')
-
-#     if len(commits) <= keep_commits_count:
-#         print("Number of commits affecting the file is within the limit. No rebase needed.")
-#         return
-
-#     # Commits to be dropped
-#     commits_to_drop = commits[:-keep_commits_count]
-
-#     # Create a rebase script to drop excess commits
-#     rebase_script = "\n".join(f"drop {commit}" for commit in commits_to_drop)
-#     with open("rebase_script.txt", "w") as file:
-#         file.write(rebase_script)
-
-#     # Perform the rebase
-#     try:
-#         # Rebase only the commits related to the file
-#         os.environ['GIT_EDITOR'] = ':'  # Setting GIT_EDITOR to ':' to prevent Vim from opening
-#         run_command(f"git rebase -i --autosquash HEAD~{len(commits)} < rebase_script.txt", check=True)
-#         print("Rebase completed. Only the latest 20 commits are retained.")
-#     except subprocess.CalledProcessError:
-#         print("Rebase failed. Please resolve conflicts or handle the rebase manually.")
-#         return
-
-#     # Force-push the updated branch to the remote repository
-#     try:
-#         run_command("git push --force", check=True)
-#         print("Force-pushed the changes to the remote repository.")
-#     except subprocess.CalledProcessError:
-#         print("Failed to push the changes to the remote repository.")
 
 def automate_rebase(repo_dir, file_name='dump.sql.gz', keep_commits_count=20):
     """Automate Git rebase and handle commits related to a specific file."""
@@ -638,8 +725,9 @@ def git_push(repo_dir, branch_name, file_name='dump.sql.gz'):
 signal.signal(signal.SIGINT, on_interrupt)
 signal.signal(signal.SIGTERM, on_interrupt)
 
-#Define time wait period for next update
-waitTime = 600
+# Define time wait period for next update. 4 hours
+# waitTime = 14400
+waitTime = 1000
 
 while (True):
     try:
@@ -669,10 +757,10 @@ while (True):
                         
                             break
 
-                    mysql_dump('localhost', 'vicky', 'ILoveBlack@2022', 'cscmailsbackup')
-                    # mysql_dump('localhost', 'lyn', '0gDUnc55', 'cscmailsbackup')
-                    compress_and_delete_sql_file('dump.sql')
-                    git_push(repo_dir, branch_name)
+                    # mysql_dump('localhost', 'vicky', 'ILoveBlack@2022', 'cscmailsbackup')
+                    # # mysql_dump('localhost', 'lyn', '0gDUnc55', 'cscmailsbackup')
+                    # compress_and_delete_sql_file('dump.sql')
+                    # git_push(repo_dir, branch_name)
 
 
                     print(" ")
@@ -681,21 +769,32 @@ while (True):
                     SentItems = Sentbox.Items
 
                     updateInboxMails(InboxItems)
+                    mysql_dump('localhost', 'vicky', 'ILoveBlack@2022', 'cscmailsbackup')
+                    # mysql_dump('localhost', 'lyn', '0gDUnc55', 'cscmailsbackup')
+                    compress_and_delete_sql_file('dump.sql')
+                    # git_push(repo_dir, branch_name)
+                    sys.exit(1)
                     updateSentMails(SentItems)
                     mysql_dump('localhost', 'vicky', 'ILoveBlack@2022', 'cscmailsbackup')
                     # mysql_dump('localhost', 'lyn', '0gDUnc55', 'cscmailsbackup')
                     compress_and_delete_sql_file('dump.sql')
+                    sys.exit(1)
                     git_push(repo_dir, branch_name)
                    
 
                     print("Calling Gods_Eye")
                     # Use subprocess to run the other Python file
-                    subprocess.run(['python', "Gods_Eye_Final.py"])
+                    # subprocess.run(['python', "Gods_Eye_Final.py"])
+                    # subprocess.run(['python', "C:\\Users\\{username}\\QE Git\\Bayobab-Py-N-Dump\\Gods_Eye_Final.py"])
+                    # subprocess.run(['python', r'C:\Users\{username}\QE GIT\Bayobab-Py-N-Dump\Gods_Eye_Final.py'])
+                    subprocess.run(['python', r'C:\Users\monitoring.server1\QE-2026-Updated\Bayobab-Dump-26\Python_ScriptsGods_Eye_Final.py'])
+                    # subprocess.run(['python', "Gods_Eye_Final.py"])
 
 
                     print(" ")
-                    print("Waiting for " , waitTime ," Seconds to proceed")
-                    time.sleep(waitTime)          
+                    # print("Waiting for " , waitTime ," Seconds to proceed")
+                    time.sleep(waitTime)  
+                    # sys.exit(1)        
 
                     
                 except pywintypes.com_error as e:
@@ -707,7 +806,8 @@ while (True):
                 # Your code when the internet is disconnected goes here
                 # Replace this with your actual code
             # Wait for a period of time before checking the internet connection again
-                time.sleep(5)
+                # time.sleep(5)
+                sys.exit(1)
 
     except Exception as e:
         print(f"An error occurred: {e}")
